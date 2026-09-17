@@ -20,7 +20,7 @@ const ROLES = {
 async function setBotCommandsMenu() {
   try {
     await bot.telegram.setMyCommands([
-      { command: 'start', description: '✨ شروع ربات و نمایش معرفی گاد با رقص نور' },
+      { command: 'start', description: '✨ شروع ربات و نمایش معرفی گاد' },
       { command: 'mafia', description: '🌙 شروع لابی جدید بازی مافیا در گروه' },
       { command: 'join', description: '🎮 پیوستن به بازی در حال ثبت‌نام' },
       { command: 'startgame', description: '🚀 توزیع نقش‌ها و شروع رسمی بازی' },
@@ -138,25 +138,23 @@ async function checkGameEnd(ctx, chatId, session) {
   return false;
 }
 
-// پیاده‌سازی کامند start با رقص نور متنی و دکمه شیشه‌ای لابی
+// کامند start با رقص نور متنی و دکمه شیشه‌ای «لابی»
 bot.start(async (ctx) => {
   setBotCommandsMenu();
 
-  // فریم‌های رقص نور متنی برای افکت ادیت شدن پیام
   const frames = [
     "✨ 🌟 💫 **آماده‌سازی تاریکی...** 💫 🌟 ✨\n\n🔮 درگاه‌های شهر مافیا در حال باز شدن است...",
     "⚡ 🔵 🟣 **گاد هوشمند بیدار شد!** 🟣 🔵 ⚡\n\n🎭 من راوی و گرداننده تاریک‌ترین بازی قرن هستم...",
-    "🔥 🔴 🟡 **شهر آماده نبرد است...** 🟡 🔴 🔥\n\n👑 برای شروع لابی و ورود بازیکنان، روی دکمه زیر کلیک کنید!"
+    "🔥 🔴 🟡 **شهر آماده نبرد است...** 🟡 🔴 🔥\n\n👑 برای ساخت لابی و ورود بازیکنان، روی دکمه زیر کلیک کنید!"
   ];
 
   const keyboard = Markup.inlineKeyboard([
-    [Markup.button.callback("🌙 باز کردن لابی مافیا (/mafia)", "action_start_lobby_from_start")]
+    [Markup.button.callback("لابی", "action_start_lobby_from_start")]
   ]);
 
   try {
     let sentMsg = await ctx.reply(frames[0], keyboard);
     
-    // شبیه‌سازی رقص نور با ادیت کردن متوالی پیام
     setTimeout(async () => {
       try { await bot.telegram.editMessageText(ctx.chat.id, sentMsg.message_id, undefined, frames[1], keyboard); } catch (e) {}
     }, 1000);
@@ -170,10 +168,10 @@ bot.start(async (ctx) => {
   }
 });
 
-// اکشن دکمه شیشه‌ای شروع لابی از طریق کامند استارت
+// اکشن دکمه شیشه‌ای «لابی» که فقط همان پیامِ استارت را ادیت می‌کند تا دوبار ارسال نشود
 bot.action('action_start_lobby_from_start', async (ctx) => {
   const chatId = ctx.chat.id;
-  await ctx.answerCbQuery("🌙 لابی بازی در حال ساخت...");
+  await ctx.answerCbQuery("🌙 لابی بازی ایجاد شد...");
 
   gameSessions[chatId] = {
     status: 'lobby',
@@ -189,11 +187,10 @@ bot.action('action_start_lobby_from_start', async (ctx) => {
 
   try {
     const sentMsg = await ctx.editMessageText(getLobbyText([]), getLobbyKeyboard());
-    await bot.telegram.pinChatMessage(chatId, sentMsg.message_id);
-  } catch (e) {
-    const sentMsg = await ctx.reply(getLobbyText([]), getLobbyKeyboard());
-    try { await bot.telegram.pinChatMessage(chatId, sentMsg.message_id); } catch(err) {}
-  }
+    if (sentMsg && sentMsg.message_id) {
+      await bot.telegram.pinChatMessage(chatId, sentMsg.message_id);
+    }
+  } catch (e) {}
 });
 
 bot.command('help', (ctx) => {
