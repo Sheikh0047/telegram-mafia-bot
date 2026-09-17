@@ -16,7 +16,7 @@ const ROLES = {
   citizen: { name: "شهروند ساده", emoji: "👤", team: "citizen" }
 };
 
-// تابع ارتباط با OpenRouter (گاد هوش مصنوعی)
+// تابع ارتباط با OpenRouter (گاد هوشمند)
 async function askGameMaster(prompt, context = "") {
   try {
     const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
@@ -53,12 +53,39 @@ async function askGameMaster(prompt, context = "") {
   }
 }
 
+// تابع کمکی برای ساخت متن لابی همراه با لیست مرتب بازیکنان
+function getLobbyText(players) {
+  let text = "🌙 **تاریکی فرا می‌رسد...** 🌙\n\n" +
+             "بازی جدید مافیا در حال ثبت‌نام است! 👥\n\n" +
+             `📊 **تعداد بازیکنان تا این لحظه:** ${players.length} نفر\n\n`;
+
+  if (players.length > 0) {
+    text += "📋 **لیست بازیکنان حاضر:**\n";
+    players.forEach((p, index) => {
+      text += `${index + 1}. 👤 ${p.name}\n`;
+    });
+  } else {
+    text += "📋 *هنوز هیچ‌کس به بازی نپیوسته است. اولین نفر باشید!*";
+  }
+
+  text += "\n\n⚠️ **نکته:** حتماً قبل از زدن دکمه پیوستن، ربات را در پی‌وی استارت کرده باشید تا نقش‌تان را برایتان بفرستم!";
+  return text;
+}
+
+// دکمه‌های شیشه‌ای لابی (پیوستن + شروع بازی)
+function getLobbyKeyboard() {
+  return Markup.inlineKeyboard([
+    [Markup.button.callback("🎮 پیوستن به بازی (Join)", "action_join")],
+    [Markup.button.callback("🚀 شروع بازی (Start)", "action_start_game")]
+  ]);
+}
+
 // دستور استارت ربات (در پی‌وی)
 bot.start((ctx) => {
   if (ctx.chat.type === 'private') {
     ctx.reply(
       "✨ سلام! من **گاد هوشمند بازی مافیا** هستم. 🎭\n\n" +
-      "من اینجا هستم تا نقش مخفی‌ات رو بهت بگم، قابلیت‌های شب (شلیک، استعلام، نجات) رو مدیریت کنم و بازی رو پیش ببرم.\n\n" +
+      "من اینجا هستم تا نقش مخفی‌ات رو بهت بگم، قابلیت‌های شب رو مدیریت کنم و بازی رو پیش ببرم.\n\n" +
       "فقط کافیه منو به گروهت اضافه کنی و دستور `/mafia` رو بزنی تا بازی شروع بشه! 🚀",
       Markup.inlineKeyboard([
         [Markup.button.url("➕ افزودن ربات به گروه", `https://t.me/${bot.botInfo?.username || 'YourBotUsername'}?startgroup=true`)]
@@ -70,7 +97,7 @@ bot.start((ctx) => {
 });
 
 // دستور شروع لابی بازی در گروه
-bot.command('mafia', (ctx) => {
+bot.command('mafia', async (ctx) => {
   const chatId = ctx.chat.id;
   
   if (ctx.chat.type === 'private') {
@@ -79,19 +106,11 @@ bot.command('mafia', (ctx) => {
 
   gameSessions[chatId] = {
     status: 'lobby', 
-    players: [],     // کل بازیکنان { id, name, username }
-    rolesAssigned: {} // id -> نقش
+    players: [],     
+    rolesAssigned: {} 
   };
 
-  ctx.reply(
-    "🌙 **تاریکی فرا می‌رسد...** 🌙\n\n" +
-    "بازی جدید مافیا در حال ثبت‌نام است! 👥\n" +
-    "برای شرکت در بازی، روی دکمه زیر کلیک کنید (یا دستور `/join` را بفرستید):\n\n" +
-    "⚠️ **نکته:** حتماً قبل از زدن دکمه، ربات را در پی‌وی استارت کرده باشید تا نقش‌تان را برایتان بفرستم!",
-    Markup.inlineKeyboard([
-      [Markup.button.callback("🎮 پیوستن به بازی (Join)", "action_join")]
-    ])
-  );
+  await ctx.reply(getLobbyText([]), getLobbyKeyboard());
 });
 
 // دکمه شیشه‌ای پیوستن به بازی
@@ -100,7 +119,7 @@ bot.action('action_join', async (ctx) => {
   const user = ctx.from;
 
   if (!gameSessions[chatId] || gameSessions[chatId].status !== 'lobby') {
-    return ctx.answerCbQuery("❌ ثبت‌نام بازی در این گروه فعال نیست!", { show_alert: true });
+    return ctx.answerCbQuery("❌ ثبت‌نام بازی در این گروه فعال نیست یا بازی شروع شده است!", { show_alert: true });
   }
 
   const exists = gameSessions[chatId].players.some(p => p.id === user.id);
@@ -114,13 +133,22 @@ bot.action('action_join', async (ctx) => {
     username: user.username || user.first_name
   });
 
-  const count = gameSessions[chatId].players.length;
   await ctx.answerCbQuery(`✅ ${user.first_name} با موفقیت به بازی پیوست!`);
-  ctx.reply(`✅ **${user.first_name}** به جمع بازیکنان پیوست! (تعداد کل: ${count} نفر) 👥`);
+
+  // ویرایش پیام لابی در گروه برای آپدیت لیست و تعداد نفرات
+  try {
+    await ctx.editMessageText(
+      getLobbyText(gameSessions[chatId].players),
+      getLobbyKeyboard()
+    );
+  } catch (err) {
+    // اگر متن پیام تغییر نکرده بود خطا ندهد
+    console.log("Edit message error (safe to ignore if text didn't change):", err);
+  }
 });
 
 // دستور پیوستن متنی (پشتیبانی از /join)
-bot.command('join', (ctx) => {
+bot.command('join', async (ctx) => {
   const chatId = ctx.chat.id;
   const user = ctx.from;
 
@@ -139,27 +167,27 @@ bot.command('join', (ctx) => {
     username: user.username || user.first_name
   });
 
+  // ارسال پیام جدید یا آپدیت لابی
   ctx.reply(`✅ **${user.first_name}** به لیست بازیکنان اضافه شد! (${gameSessions[chatId].players.length} نفر)`);
 });
 
-// شروع رسمی بازی و پخش نقش‌ها در پی‌وی بازیکنان
-bot.command('startgame', async (ctx) => {
-  const chatId = ctx.chat.id;
+// دکمه شیشه‌ای شروع بازی (یا دستور /startgame)
+async function handleGameStart(ctx, chatId) {
   const session = gameSessions[chatId];
 
   if (!session || session.status !== 'lobby') {
-    return ctx.reply("❌ هیچ لابی فعالی وجود ندارد.");
+    return ctx.answerCbQuery ? ctx.answerCbQuery("❌ هیچ لابی فعالی وجود ندارد.", { show_alert: true }) : ctx.reply("❌ لابی فعالی وجود ندارد.");
   }
 
   if (session.players.length < 3) {
-    return ctx.reply("⚠️ تعداد بازیکنان کم است! حداقل به ۳ بازیکن نیاز داریم.");
+    const msg = "⚠️ تعداد بازیکنان کم است! حداقل به ۳ بازیکن نیاز داریم.";
+    return ctx.answerCbQuery ? ctx.answerCbQuery(msg, { show_alert: true }) : ctx.reply(msg);
   }
 
   session.status = 'playing';
   const players = session.players;
 
   // توزیع هوشمند نقش‌ها
-  // برای سادگی: نفر اول پدرخوانده، نفر دوم دکتر، نفر سوم کارآگاه، بقیه شهروند/مافیا
   const assignedRoles = {};
   players.forEach((p, index) => {
     let roleKey = 'citizen';
@@ -180,7 +208,6 @@ bot.command('startgame', async (ctx) => {
 
     try {
       let extraText = "";
-      // اگر مافیاست، لیست همکاران مافیاش رو بهش بگیم تو پی‌وی
       if (roleInfo.team === 'mafia') {
         const mafiaTeam = players
           .filter(pl => assignedRoles[pl.id] === 'mafia' || assignedRoles[pl.id] === 'godfather')
@@ -202,28 +229,45 @@ bot.command('startgame', async (ctx) => {
       );
     } catch (err) {
       console.log(`Could not send PM to user ${p.id}:`, err);
-      ctx.reply(`⚠️ ${p.name} عزیز، ربات رو توی پی‌وی استارت نکردی! اول برو تو پی‌وی ربات رو استارت کن تا نقش رو بهت بفرستم.`);
     }
   }
 
-  // گزارش به گروه
+  // درخواست از هوش مصنوعی برای متن آغازین
   const prompt = `بازی با ${players.length} بازیکن شروع شد. نقش‌ها پخش شد. فاز اول (شب اول) را با بیانی حماسی اعلام کن.`;
   const aiIntro = await askGameMaster(prompt, `تعداد بازیکنان: ${players.length}`);
 
-  ctx.reply(
-    `🎬 **بازی رسماً آغاز شد و نقش‌ها مخفیانه در پی‌وی به بازیکنان ارسال شد!** 🕵️‍♂️🦹‍♂️\n\n` +
-    `${aiIntro}\n\n` +
-    `🌙 **شب اول آغاز شد!** بازیکنان دارای مسئولیت (مافیا، دکتر، کارآگاه) به پی‌وی ربات مراجعه کنند تا اکشن‌های شبانه خود را با دکمه‌های شیشه‌ای انجام دهند.`,
-    Markup.inlineKeyboard([
-      [Markup.button.callback("🌙 ورود به فاز شب / اکشن‌ها", "action_night_actions")]
-    ])
-  );
+  const startText = `🎬 **بازی رسماً آغاز شد و نقش‌ها مخفیانه در پی‌وی به بازیکنان ارسال شد!** 🕵️‍♂️🦹‍♂️\n\n` +
+                    `${aiIntro}\n\n` +
+                    `🌙 **شب اول آغاز شد!** بازیکنان دارای مسئولیت به پی‌وی ربات مراجعه کنند.`;
+
+  if (ctx.editMessageText) {
+    try {
+      await ctx.editMessageText(startText, Markup.inlineKeyboard([
+        [Markup.button.callback("🌙 ورود به فاز شب / اکشن‌ها", "action_night_actions")]
+      ]));
+    } catch (e) {
+      ctx.reply(startText);
+    }
+  } else {
+    ctx.reply(startText);
+  }
+}
+
+// هندلر کلیک دکمه شروع بازی
+bot.action('action_start_game', async (ctx) => {
+  await ctx.answerCbQuery("🚀 بازی در حال استارت است...");
+  await handleGameStart(ctx, ctx.chat.id);
+});
+
+// دستور متنی شروع بازی
+bot.command('startgame', (ctx) => {
+  handleGameStart(ctx, ctx.chat.id);
 });
 
 // راهنمای نقش در پی‌وی
 bot.action('action_role_help', async (ctx) => {
   await ctx.answerCbQuery();
-  ctx.reply("📖 نقش شما کاملاً محرمانه است. به هیچ‌کس اعتماد نکنید و فریب حرف دیگران را در گروه نخورید! شهر یا مافیا... برنده نهایی کیست؟");
+  ctx.reply("📖 نقش شما کاملاً محرمانه است. به هیچ‌کس اعتماد نکنید و فریب حرف دیگران را در گروه نخورید!");
 });
 
 // مدیریت کلیک دکمه فاز شب
@@ -231,7 +275,6 @@ bot.action('action_night_actions', async (ctx) => {
   await ctx.answerCbQuery();
   const userId = ctx.from.id;
   
-  // پیدا کردن بازی فعال این کاربر
   let userRole = null;
   let activeChatId = null;
 
@@ -248,18 +291,15 @@ bot.action('action_night_actions', async (ctx) => {
   }
 
   const session = gameSessions[activeChatId];
-  const playersList = session.players.filter(p => p.id !== userId); // بقیه بازیکنان برای هدف‌گیری
+  const playersList = session.players.filter(p => p.id !== userId);
 
   if (userRole === 'mafia' || userRole === 'godfather') {
-    // دکمه‌های انتخاب طعمه برای مافیا
     const buttons = playersList.map(p => [Markup.button.callback(`🎯 شلیک به: ${p.name}`, `shoot_${p.id}`)]);
     ctx.reply("🔫 **فاز شب مافیا:**\nکدام بازیکن را برای حذف در این شب هدف می‌گیرید؟", Markup.inlineKeyboard(buttons));
   } else if (userRole === 'doctor') {
-    // دکمه‌های نجات برای دکتر
     const buttons = session.players.map(p => [Markup.button.callback(`💉 نجات: ${p.name}`, `heal_${p.id}`)]);
     ctx.reply("🏥 **فاز شب دکتر:**\nامشب جان کدام بازیکن را نجات می‌دهید؟", Markup.inlineKeyboard(buttons));
   } else if (userRole === 'detective') {
-    // دکمه‌های استعلام برای کارآگاه
     const buttons = playersList.map(p => [Markup.button.callback(`🕵️‍♂️ استعلام: ${p.name}`, `detect_${p.id}`)]);
     ctx.reply("🔍 **فاز شب کارآگاه:**\nهویت کدام بازیکن را استعلام می‌گیرید؟", Markup.inlineKeyboard(buttons));
   } else {
@@ -267,37 +307,24 @@ bot.action('action_night_actions', async (ctx) => {
   }
 });
 
-// ثبت کلیک‌های شلیک مافیا
+// ثبت کلیک‌های شبانه
 bot.action(/shoot_(.+)/, async (ctx) => {
-  const targetId = ctx.match[1];
-  await ctx.answerCbQuery("🎯 هدف شما ثبت شد!");
-  ctx.reply("✅ شلیک شما با موفقیت ثبت شد. منتظر تصمیم بقیه هم‌تیمی‌ها و طلوع آفتاب باشید.");
+  await ctx.answerCbQuery("🎯 شلیک شما ثبت شد!");
+  ctx.reply("✅ شلیک ثبت شد. منتظر طلوع آفتاب باشید.");
 });
 
-// ثبت کلیک‌های نجات دکتر
 bot.action(/heal_(.+)/, async (ctx) => {
-  const targetId = ctx.match[1];
   await ctx.answerCbQuery("💉 نجات شما ثبت شد!");
-  ctx.reply("✅ بیمار خود را انتخاب کردید. امیدواریم درست تشخیص داده باشید!");
+  ctx.reply("✅ نجات ثبت شد.");
 });
 
-// ثبت استعلام کارآگاه
 bot.action(/detect_(.+)/, async (ctx) => {
-  const targetId = ctx.match[1];
   await ctx.answerCbQuery("🔍 استعلام گرفته شد!");
-  // برای جذابیت، به صورت تصادفی یا منطقی به کارآگاه بگوییم
-  ctx.reply("🔎 **نتیجه استعلام گاد:** استعلام این فرد گرفته شد و پرونده‌اش بررسی گردید... (نتیجه در صبح اعلام می‌شود)");
+  ctx.reply("🔎 استعلام انجام شد. نتیجه در صبح اعلام می‌گردد.");
 });
 
-// دستور کمک گروهی
 bot.command('help', (ctx) => {
-  ctx.reply(
-    "📜 **راهنمای حرفه‌ای ربات مافیا:**\n\n" +
-    "🔹 `/mafia` - شروع لابی و ثبت‌نام در گروه\n" +
-    "🔹 `/join` یا دکمه شیشه‌ای - پیوستن به بازی\n" +
-    "🔹 `/startgame` - توزیع نقش‌ها در پی‌وی و شروع شب اول\n" +
-    "🔹 به پی‌وی ربات بروید تا دستورات شب و اکشن‌های نقش خود را با دکمه‌های شیشه‌ای انجام دهید!"
-  );
+  ctx.reply("📜 دستورات ربات:\n`/mafia` - شروع لابی در گروه\nبا دکمه‌های شیشه‌ای می‌توانید جوین شوید یا بازی را استارت بزنید.");
 });
 
 // هندلر اصلی وب‌هک Vercel
@@ -307,7 +334,7 @@ module.exports = async (req, res) => {
       await bot.handleUpdate(req.body);
       res.status(200).json({ status: 'ok' });
     } else {
-      res.status(200).send('Telegram Mafia Bot with Secret PM Roles & Inline Keyboards is active! 🚀');
+      res.status(200).send('Telegram Mafia Bot is active! 🚀');
     }
   } catch (error) {
     console.error("Webhook Error:", error);
