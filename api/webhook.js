@@ -177,7 +177,8 @@ bot.command('mafia', async (ctx) => {
     players: [],     
     rolesAssigned: {}, 
     isAlive: {},       
-    nightActions: {}   
+    nightActions: {},
+    votes: {}          
   };
 
   await ctx.reply(getLobbyText([]), getLobbyKeyboard());
@@ -225,7 +226,6 @@ bot.command('endgame', (ctx) => {
   }
 });
 
-// شروع بازی و توزیع نقش‌ها
 async function handleGameStart(ctx, chatId) {
   const session = gameSessions[chatId];
   if (!session || session.status !== 'lobby') return;
@@ -248,7 +248,6 @@ async function handleGameStart(ctx, chatId) {
   });
   session.rolesAssigned = assignedRoles;
 
-  // ارسال نقش‌ها به پی‌وی بازیکنان
   for (const p of players) {
     const rKey = assignedRoles[p.id];
     const rInfo = ROLES[rKey];
@@ -299,7 +298,6 @@ bot.command('startgame', (ctx) => {
   handleGameStart(ctx, ctx.chat.id);
 });
 
-// ورود به فاز شب با دکمه ادامه
 bot.action(/start_night_(.+)/, async (ctx) => {
   const chatId = ctx.match[1];
   const session = gameSessions[chatId];
@@ -319,7 +317,6 @@ bot.action(/start_night_(.+)/, async (ctx) => {
   } catch (e) {}
 });
 
-// ارسال دکمه‌های اکشن شب به پی‌وی نقش‌ها
 async function sendNightActionsToPrivate(chatId, session) {
   session.nightActions = {};
 
@@ -343,7 +340,6 @@ async function sendNightActionsToPrivate(chatId, session) {
   }
 }
 
-// طلوع آفتاب و شروع روز
 bot.action(/start_day_(.+)/, async (ctx) => {
   const chatId = ctx.match[1];
   const session = gameSessions[chatId];
@@ -372,7 +368,6 @@ bot.action(/start_day_(.+)/, async (ctx) => {
   } catch (e) {}
 });
 
-// مدیریت نوبت صحبت ۳۰ ثانیه‌ای بازیکنان به ترتیب
 bot.action(/speech_start_(.+)_(.+)/, async (ctx) => {
   const match = ctx.match;
   const chatId = match[1];
@@ -384,7 +379,6 @@ bot.action(/speech_start_(.+)_(.+)/, async (ctx) => {
   const alivePlayers = session.players.filter(p => session.isAlive[p.id]);
 
   if (index >= alivePlayers.length) {
-    // پایان صحبت‌ها، رفتن به رای‌گیری با دکمه‌های شیشه‌ای
     return startVotingPhase(ctx, chatId, session);
   }
 
@@ -401,22 +395,24 @@ bot.action(/speech_start_(.+)_(.+)/, async (ctx) => {
   } catch (e) {}
 });
 
-// فاز رأی‌گیری با دکمه‌های شیشه‌ای
+// فاز رأی‌گیری روز
 async function startVotingPhase(ctx, chatId, session) {
+  session.votes = {}; // پاکسازی آرای قبلی
   const alivePlayers = session.players.filter(p => session.isAlive[p.id]);
   
-  const buttons = alivePlayers.map(p => [Markup.button.callback(`⚖️ رأی به اعدام: ${p.name}`, `vote_${chatId}_${p.id}`)]);
+  const buttons = alivePlayers.map(p => [Markup.button.callback(`⚖️ رأی به: ${p.name}`, `vote_${chatId}_${p.id}`)]);
   buttons.push([Markup.button.callback("🚫 رد رأی (هیچ‌کدام)", `vote_${chatId}_none`)]);
+  buttons.push([Markup.button.callback("🔒 پایان رأی‌گیری و اعلام نتیجه", `end_vote_${chatId}`)]);
 
   try {
     await ctx.editMessageText(
-      "🗳 **فاز رأی‌گیری روز:**\nکدام بازیکن را برای اعدام مشکوک می‌دانید؟ روی دکمه زیر کلیک کنید:",
+      "🗳 **فاز رأی‌گیری روز:**\nکدام بازیکن را برای اعدام مشکوک می‌دانید؟ (روی دکمه‌ها کلیک کنید، سپس ادمین یا ربات پایان رأی‌گیری را بزند)",
       Markup.inlineKeyboard(buttons)
     );
   } catch (e) {}
 }
 
-// ثبت رای‌گیری شیشه‌ای
+// ثبت رأی بازیکن بدون بستن منو برای دیگران
 bot.action(/vote_(.+)_(.+)/, async (ctx) => {
   const match = ctx.match;
   const chatId = match[1];
@@ -425,16 +421,61 @@ bot.action(/vote_(.+)_(.+)/, async (ctx) => {
 
   const session = gameSessions[chatId];
   if (!session || session.isAlive[userId] === false) {
-    return ctx.answerCbQuery("❌ شما حق رأی ندارید!", { show_alert: true });
+    return ctx.answerCbQuery("❌ شما حق رأی ندارید یا مرده‌اید!", { show_alert: true });
   }
 
+  session.votes[userId] = targetId;
   await ctx.answerCbQuery("✅ رأی شما با موفقیت ثبت شد!");
+});
+
+// پایان دادن به رأی‌گیری و محاسبه آرا توسط هوش مصنوعی گاد
+bot.action(/end_vote_(.+)/, async (ctx) => {
+  const chatId = ctx.match[1];
+  const session = gameSessions[chatId];
+  if (!session) return ctx.answerCbQuery("❌ بازی معتبری یافت نشد!", { show_alert: true });
+
+  await ctx.answerCbQuery("⚖️ در حال شمارش آرا...");
+
+  // شمارش آرا
+  let voteCounts = {};
+  Object.values(session.votes).forEach(targetId => {
+    if (targetId !== 'none') {
+      voteCounts[targetId] = (voteCounts[targetId] || 0) + 1;
+    }
+  });
+
+  let maxVotes = 0;
+  let targetToExecuteId = null;
+  for (const [tId, count] of Object.entries(voteCounts)) {
+    if (count > maxVotes) {
+      maxVotes = count;
+      targetToExecuteId = tId;
+    }
+  }
+
+  let executedPlayer = null;
+  if (targetToExecuteId) {
+    executedPlayer = session.players.find(p => p.id == targetToExecuteId);
+    if (executedPlayer) {
+      session.isAlive[executedPlayer.id] = false;
+    }
+  }
+
+  // درخواست از هوش مصنوعی برای اعلام نتیجه اعدام
+  const prompt = `رأی‌گیری روز به پایان رسید. بازیکنی به نام "${executedPlayer ? executedPlayer.name : 'هیچ‌کس'}" با بیشترین آرا برای اعدام انتخاب شد. نتیجه اعدام را با لحنی حماسی و سینمایی اعلام کن.`;
+  const voteResultReport = await askGameMaster(prompt, `اعدامی امروز: ${executedPlayer ? executedPlayer.name : 'هیچ‌کس'}`);
+
+  const resultText = `⚖️ **نتیجه نهایی رأی‌گیری و دادگاه روز:**\n\n${voteResultReport}\n\n` +
+                     (executedPlayer ? `⚰️ **شهر تصمیم گرفت:** ${executedPlayer.name} اعدام شد و از بازی بیرون رفت! 🪦` : `✨ شهر تصمیم گرفت امروز کسی را اعدام نکند.`);
+
   try {
-    await ctx.editMessageText("🗳 **رأی شما ثبت گردید.** منتظر اعلام نتیجه نهایی گاد بمانید.", Markup.inlineKeyboard([]));
+    await ctx.editMessageText(resultText, Markup.inlineKeyboard([
+      [Markup.button.callback("🌙 ورود به فاز شب بعدی", `start_night_${chatId}`)]
+    ]));
   } catch (e) {}
 });
 
-// هندل کردن اکشن شلیک در پی‌وی
+// اکشن‌های شب در پی‌وی
 bot.action(/shoot_(.+)_(.+)/, async (ctx) => {
   const match = ctx.match;
   const chatId = match[1];
@@ -451,7 +492,6 @@ bot.action(/shoot_(.+)_(.+)/, async (ctx) => {
   } catch (e) {}
 });
 
-// هندل کردن اکشن نجات دکتر در پی‌وی
 bot.action(/heal_(.+)_(.+)/, async (ctx) => {
   const match = ctx.match;
   const chatId = match[1];
@@ -468,7 +508,6 @@ bot.action(/heal_(.+)_(.+)/, async (ctx) => {
   } catch (e) {}
 });
 
-// هندل کردن اکشن استعلام کارآگاه در پی‌وی
 bot.action(/detect_(.+)_(.+)/, async (ctx) => {
   const match = ctx.match;
   const chatId = match[1];
