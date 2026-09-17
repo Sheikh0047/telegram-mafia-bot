@@ -95,6 +95,48 @@ function getLobbyKeyboard() {
   ]);
 }
 
+// تابع بررسی شرایط برد و باخت بازی
+async function checkGameEnd(ctx, chatId, session) {
+  let alivePlayers = session.players.filter(p => session.isAlive[p.id]);
+  
+  let mafiaCount = alivePlayers.filter(p => {
+    let role = session.rolesAssigned[p.id];
+    return ROLES[role].team === 'mafia';
+  }).length;
+
+  let citizenCount = alivePlayers.filter(p => {
+    let role = session.rolesAssigned[p.id];
+    return ROLES[role].team === 'citizen';
+  }).length;
+
+  let gameOver = false;
+  let winMessage = "";
+
+  if (mafiaCount >= citizenCount && mafiaCount > 0) {
+    gameOver = true;
+    winMessage = "🦹‍♂️🔥 **پیروزی تیم مافیا!**\n\nتعداد مافیاها به حد نصاب رسید و شهر را به تسخیر خود درآوردند. مافیا برنده شد!";
+  } else if (mafiaCount === 0) {
+    gameOver = true;
+    winMessage = "🛡✨ **پیروزی بزرگ شهروندان!**\n\nتمامی اعضای خائن مافیا ریشه‌کن شدند و شهر دوباره امن شد. شهروندان برنده شدند!";
+  }
+
+  if (gameOver) {
+    try {
+      const msg = await ctx.editMessageText(winMessage, Markup.inlineKeyboard([]));
+      if (msg && msg.message_id) {
+        await bot.telegram.pinChatMessage(chatId, msg.message_id);
+      }
+    } catch (e) {
+      const sent = await bot.telegram.sendMessage(chatId, winMessage);
+      try { await bot.telegram.pinChatMessage(chatId, sent.message_id); } catch(err) {}
+    }
+    delete gameSessions[chatId];
+    return true;
+  }
+
+  return false;
+}
+
 bot.start((ctx) => {
   setBotCommandsMenu();
   if (ctx.chat.type === 'private') {
@@ -168,7 +210,6 @@ bot.on('text', async (ctx, next) => {
   return next();
 });
 
-// باز کردن لابی و پین کردن پیام آن در گروه
 bot.command('mafia', async (ctx) => {
   const chatId = ctx.chat.id;
   if (ctx.chat.type === 'private') return ctx.reply("❌ بازی مافیا باید داخل گروه انجام شود!");
@@ -369,7 +410,6 @@ bot.action(/start_day_(.+)/, async (ctx) => {
 
   await ctx.answerCbQuery("☀️ طلوع روز...");
 
-  // غیرفعال‌سازی دکمه‌های پی‌وی به محض طلوع آفتاب
   if (session.privateMessageIds) {
     for (const [playerId, msgId] of Object.entries(session.privateMessageIds)) {
       try {
@@ -392,7 +432,10 @@ bot.action(/start_day_(.+)/, async (ctx) => {
     session.isAlive[killedPlayer.id] = false;
   }
 
-  // ارسال نتیجه استعلام به کارآگاه
+  // بررسی پایان بازی بعد از کشته شدن در شب
+  let isEnded = await checkGameEnd(ctx, chatId, session);
+  if (isEnded) return;
+
   for (const [detectiveId, targetId] of Object.entries(session.detectiveInquiries || {})) {
     const targetPlayer = session.players.find(p => p.id == targetId);
     if (targetPlayer) {
@@ -532,6 +575,10 @@ bot.action(/end_vote_(.+)/, async (ctx) => {
   }
 
   session.round += 1;
+
+  // بررسی پایان بازی بعد از اعدام روز
+  let isEnded = await checkGameEnd(ctx, chatId, session);
+  if (isEnded) return;
 
   const prompt = `رأی‌گیری روز به پایان رسید. نتیجه اعدام: ${executedPlayer ? executedPlayer.name : 'هیچ‌کس'}. گزارش اعدام را با بیانی حماسی اعلام کن.`;
   const voteResultReport = await askGameMaster(prompt, `اعدامی: ${executedPlayer ? executedPlayer.name : 'هیچ‌کس'}`);
