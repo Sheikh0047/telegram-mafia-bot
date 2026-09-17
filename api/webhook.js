@@ -17,7 +17,7 @@ const ROLES = {
   citizen: { name: "شهروند ساده", emoji: "👤", team: "citizen" }
 };
 
-// تنظیم خودکار منوی کامندها برای تلگرام
+// تنظیم خودکار منوی کامندها برای تلگرام (ظاهر شدن توضیحات فارسی با زدن /)
 async function setBotCommandsMenu() {
   try {
     await bot.telegram.setMyCommands([
@@ -32,6 +32,7 @@ async function setBotCommandsMenu() {
   }
 }
 
+// تابع ارتباط با OpenRouter (گاد هوشمند)
 async function askGameMaster(prompt, context = "") {
   try {
     const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
@@ -82,7 +83,7 @@ function getLobbyText(players) {
     text += "📋 *هنوز هیچ‌کس به بازی نپیوسته است.*";
   }
 
-  text += "\n\n⚠️ **نکته:** حتماً ربات را در پی‌وی استارت کرده باشید تا نقش‌ها ارسال شوند!";
+  text += "\n\n⚠️ **نکته:** حتماً ربات را در پی‌وی استارت کرده باشید تا نقش‌ها برایتان ارسال شوند!";
   return text;
 }
 
@@ -450,7 +451,7 @@ module.exports = async (req, res) => {
       await bot.handleUpdate(req.body);
       res.status(200).json({ status: 'ok' });
     } else {
-      res.status(200).send('Mafia Bot with Group Direct Commands is active! 🚀');
+      res.status(200).send('Advanced Telegram Mafia Bot is running successfully! 🚀');
     }
   } catch (error) {
     console.error("Webhook Error:", error);
