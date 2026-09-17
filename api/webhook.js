@@ -174,11 +174,14 @@ bot.command('mafia', async (ctx) => {
 
   gameSessions[chatId] = {
     status: 'lobby',
+    round: 0,         // شمارشگر راندها برای مدیریت فاز شب و روز
     players: [],     
     rolesAssigned: {}, 
     isAlive: {},       
     nightActions: {},
-    votes: {}          
+    votes: {},
+    detectiveInquiries: {},
+    privateMessageIds: {} // ذخیره شناسه پیام‌های پی‌وی برای بستن دکمه‌ها
   };
 
   await ctx.reply(getLobbyText([]), getLobbyKeyboard());
@@ -235,6 +238,7 @@ async function handleGameStart(ctx, chatId) {
   }
 
   session.status = 'playing';
+  session.round = 1;
   const players = session.players;
 
   const assignedRoles = {};
@@ -319,6 +323,7 @@ bot.action(/start_night_(.+)/, async (ctx) => {
 
 async function sendNightActionsToPrivate(chatId, session) {
   session.nightActions = {};
+  session.privateMessageIds = session.privateMessageIds || {};
 
   for (const p of session.players) {
     if (!session.isAlive[p.id]) continue;
@@ -326,15 +331,20 @@ async function sendNightActionsToPrivate(chatId, session) {
     const aliveTargets = session.players.filter(pl => pl.id !== p.id && session.isAlive[pl.id]);
 
     try {
+      let sentMsg = null;
       if (role === 'mafia' || role === 'godfather') {
         const buttons = aliveTargets.map(target => [Markup.button.callback(`🎯 شلیک به: ${target.name}`, `shoot_${chatId}_${target.id}`)]);
-        await bot.telegram.sendMessage(p.id, "🔫 **فاز شب:** هدف خود را برای شلیک انتخاب کنید:", Markup.inlineKeyboard(buttons));
+        sentMsg = await bot.telegram.sendMessage(p.id, `🌙 **شب ${session.round} - فاز شلیک:**\nهدف خود را برای شلیک انتخاب کنید:`, Markup.inlineKeyboard(buttons));
       } else if (role === 'doctor') {
         const buttons = session.players.filter(pl => session.isAlive[pl.id]).map(target => [Markup.button.callback(`💉 نجات: ${target.name}`, `heal_${chatId}_${target.id}`)]);
-        await bot.telegram.sendMessage(p.id, "🏥 **فاز شب:** کسی را برای نجات انتخاب کنید:", Markup.inlineKeyboard(buttons));
+        sentMsg = await bot.telegram.sendMessage(p.id, `🌙 **شب ${session.round} - فاز نجات:**\nکسی را برای نجات انتخاب کنید:`, Markup.inlineKeyboard(buttons));
       } else if (role === 'detective') {
         const buttons = aliveTargets.map(target => [Markup.button.callback(`🕵️‍♂️ استعلام: ${target.name}`, `detect_${chatId}_${target.id}`)]);
-        await bot.telegram.sendMessage(p.id, "🔍 **فاز شب:** استعلام هویت کدام بازیکن را می‌خواهید؟", Markup.inlineKeyboard(buttons));
+        sentMsg = await bot.telegram.sendMessage(p.id, `🌙 **شب ${session.round} - فاز استعلام:**\nهویت کدام بازیکن را می‌خواهید استعلام بگیرید؟`, Markup.inlineKeyboard(buttons));
+      }
+
+      if (sentMsg) {
+        session.privateMessageIds[p.id] = sentMsg.message_id;
       }
     } catch (e) {}
   }
@@ -347,12 +357,46 @@ bot.action(/start_day_(.+)/, async (ctx) => {
 
   await ctx.answerCbQuery("☀️ طلوع روز...");
 
+  // بستن دکمه‌های پی‌وی بازیکنان به محض اینکه صبح شد
+  if (session.privateMessageIds) {
+    for (const [playerId, msgId] of Object.entries(session.privateMessageIds)) {
+      try {
+        await bot.telegram.editMessageText(
+          playerId, 
+          msgId, 
+          undefined, 
+          "⏳ **فاز شب به پایان رسید و این دکمه منقضی شد.**", 
+          Markup.inlineKeyboard([])
+        );
+      } catch (e) {}
+    }
+    session.privateMessageIds = {};
+  }
+
   const alivePlayers = session.players.filter(p => session.isAlive[p.id]);
   let killedPlayer = alivePlayers.length > 0 ? alivePlayers[Math.floor(Math.random() * alivePlayers.length)] : null;
   
   if (killedPlayer) {
     session.isAlive[killedPlayer.id] = false;
   }
+
+  // ارسال استعلام کارآگاه
+  for (const [detectiveId, targetId] of Object.entries(session.detectiveInquiries || {})) {
+    const targetPlayer = session.players.find(p => p.id == targetId);
+    if (targetPlayer) {
+      const targetRole = session.rolesAssigned[targetId];
+      const isMafiaTeam = ROLES[targetRole].team === 'mafia' && targetRole !== 'godfather';
+      
+      const inquiryResultText = isMafiaTeam 
+        ? `🚨 **نتیجه استعلام کارآگاه:**\n\nبازیکن **${targetPlayer.name}** جزء تیم **مافیا** است! 🦹‍♂️⚠️`
+        : `🛡 **نتیجه استعلام کارآگاه:**\n\nبازیکن **${targetPlayer.name}** پاک (شهروند یا پدرخوانده) است. ✅`;
+
+      try {
+        await bot.telegram.sendMessage(detectiveId, inquiryResultText);
+      } catch (e) {}
+    }
+  }
+  session.detectiveInquiries = {};
 
   const prompt = `خورشید طلوع کرد. بازیکنی به نام "${killedPlayer ? killedPlayer.name : 'هیچ‌کس'}" دیشب کشته شد. گزارش مرگبار صبح را اعلام کن.`;
   const morningReport = await askGameMaster(prompt, `قربانی: ${killedPlayer ? killedPlayer.name : 'ندارد'}`);
@@ -395,9 +439,8 @@ bot.action(/speech_start_(.+)_(.+)/, async (ctx) => {
   } catch (e) {}
 });
 
-// فاز رأی‌گیری روز
 async function startVotingPhase(ctx, chatId, session) {
-  session.votes = {}; // پاکسازی آرای قبلی
+  session.votes = {}; 
   const alivePlayers = session.players.filter(p => session.isAlive[p.id]);
   
   const buttons = alivePlayers.map(p => [Markup.button.callback(`⚖️ رأی به: ${p.name}`, `vote_${chatId}_${p.id}`)]);
@@ -406,13 +449,12 @@ async function startVotingPhase(ctx, chatId, session) {
 
   try {
     await ctx.editMessageText(
-      "🗳 **فاز رأی‌گیری روز:**\nکدام بازیکن را برای اعدام مشکوک می‌دانید؟ (روی دکمه‌ها کلیک کنید، سپس ادمین یا ربات پایان رأی‌گیری را بزند)",
+      "🗳 **فاز رأی‌گیری روز:**\nکدام بازیکن را برای اعدام مشکوک می‌دانید؟ روی دکمه‌ها کلیک کنید، سپس پایان رأی‌گیری را بزنید:",
       Markup.inlineKeyboard(buttons)
     );
   } catch (e) {}
 }
 
-// ثبت رأی بازیکن بدون بستن منو برای دیگران
 bot.action(/vote_(.+)_(.+)/, async (ctx) => {
   const match = ctx.match;
   const chatId = match[1];
@@ -428,7 +470,6 @@ bot.action(/vote_(.+)_(.+)/, async (ctx) => {
   await ctx.answerCbQuery("✅ رأی شما با موفقیت ثبت شد!");
 });
 
-// پایان دادن به رأی‌گیری و محاسبه آرا توسط هوش مصنوعی گاد
 bot.action(/end_vote_(.+)/, async (ctx) => {
   const chatId = ctx.match[1];
   const session = gameSessions[chatId];
@@ -436,7 +477,6 @@ bot.action(/end_vote_(.+)/, async (ctx) => {
 
   await ctx.answerCbQuery("⚖️ در حال شمارش آرا...");
 
-  // شمارش آرا
   let voteCounts = {};
   Object.values(session.votes).forEach(targetId => {
     if (targetId !== 'none') {
@@ -454,19 +494,31 @@ bot.action(/end_vote_(.+)/, async (ctx) => {
   }
 
   let executedPlayer = null;
+  let executionMessage = "";
+
   if (targetToExecuteId) {
     executedPlayer = session.players.find(p => p.id == targetToExecuteId);
     if (executedPlayer) {
       session.isAlive[executedPlayer.id] = false;
+      const roleKey = session.rolesAssigned[executedPlayer.id];
+      const roleInfo = ROLES[roleKey];
+
+      if (roleInfo.team === 'citizen') {
+        executionMessage = `🚨 **اشتباه بزرگ شهر!**\nشهروند بی‌گناه، **${executedPlayer.name}** با نقش **${roleInfo.name} ${roleInfo.emoji}** را به اشتباه اعدام کردید! 🪦❌`;
+      } else {
+        executionMessage = `🎯 **پیروزی شهر در دادگاه!**\nبازیکن خائن **${executedPlayer.name}** با نقش **${roleInfo.name} ${roleInfo.emoji}** (عضو مافیا) با رأی قاطع اعدام شد! 🔥⚖️`;
+      }
     }
+  } else {
+    executionMessage = "✨ شهر تصمیم گرفت امروز هیچ‌کس را اعدام نکند.";
   }
 
-  // درخواست از هوش مصنوعی برای اعلام نتیجه اعدام
-  const prompt = `رأی‌گیری روز به پایان رسید. بازیکنی به نام "${executedPlayer ? executedPlayer.name : 'هیچ‌کس'}" با بیشترین آرا برای اعدام انتخاب شد. نتیجه اعدام را با لحنی حماسی و سینمایی اعلام کن.`;
-  const voteResultReport = await askGameMaster(prompt, `اعدامی امروز: ${executedPlayer ? executedPlayer.name : 'هیچ‌کس'}`);
+  session.round += 1; // افزایش شماره راند برای ورود به شب بعدی
 
-  const resultText = `⚖️ **نتیجه نهایی رأی‌گیری و دادگاه روز:**\n\n${voteResultReport}\n\n` +
-                     (executedPlayer ? `⚰️ **شهر تصمیم گرفت:** ${executedPlayer.name} اعدام شد و از بازی بیرون رفت! 🪦` : `✨ شهر تصمیم گرفت امروز کسی را اعدام نکند.`);
+  const prompt = `رأی‌گیری روز به پایان رسید. نتیجه اعدام: ${executedPlayer ? executedPlayer.name : 'هیچ‌کس'}. گزارش اعدام را با بیانی حماسی اعلام کن.`;
+  const voteResultReport = await askGameMaster(prompt, `اعدامی: ${executedPlayer ? executedPlayer.name : 'هیچ‌کس'}`);
+
+  const resultText = `⚖️ **نتیجه نهایی دادگاه روز:**\n\n${voteResultReport}\n\n${executionMessage}`;
 
   try {
     await ctx.editMessageText(resultText, Markup.inlineKeyboard([
@@ -488,7 +540,7 @@ bot.action(/shoot_(.+)_(.+)/, async (ctx) => {
 
   await ctx.answerCbQuery("🎯 شلیک شما ثبت شد!");
   try {
-    await ctx.editMessageText("🎯 **شلیک شما ثبت شد.** (منقضی شده)", Markup.inlineKeyboard([]));
+    await ctx.editMessageText("🎯 **شلیک شما ثبت شد و منقضی گردید.**", Markup.inlineKeyboard([]));
   } catch (e) {}
 });
 
@@ -504,13 +556,14 @@ bot.action(/heal_(.+)_(.+)/, async (ctx) => {
 
   await ctx.answerCbQuery("💉 نجات ثبت شد!");
   try {
-    await ctx.editMessageText("🏥 **نجات بیمار ثبت شد.** (منقضی شده)", Markup.inlineKeyboard([]));
+    await ctx.editMessageText("🏥 **نجات بیمار ثبت شد و منقضی گردید.**", Markup.inlineKeyboard([]));
   } catch (e) {}
 });
 
 bot.action(/detect_(.+)_(.+)/, async (ctx) => {
   const match = ctx.match;
   const chatId = match[1];
+  const targetId = match[2];
   const userId = ctx.from.id;
 
   const session = gameSessions[chatId];
@@ -518,9 +571,12 @@ bot.action(/detect_(.+)_(.+)/, async (ctx) => {
     return ctx.answerCbQuery("❌ بازی نامعتبر است!", { show_alert: true });
   }
 
-  await ctx.answerCbQuery("🔍 استعلام گرفته شد!");
+  if (!session.detectiveInquiries) session.detectiveInquiries = {};
+  session.detectiveInquiries[userId] = targetId;
+
+  await ctx.answerCbQuery("🔍 استعلام ثبت شد!");
   try {
-    await ctx.editMessageText("🔎 **استعلام انجام شد.** نتیجه صبح مشخص می‌شود. (منقضی شده)", Markup.inlineKeyboard([]));
+    await ctx.editMessageText("🔎 **استعلام شما ثبت گردید و منقضی شد.** نتیجه صبح در پی‌وی اعلام می‌شود.", Markup.inlineKeyboard([]));
   } catch (e) {}
 });
 
