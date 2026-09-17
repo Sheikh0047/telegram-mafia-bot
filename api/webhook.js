@@ -20,6 +20,7 @@ const ROLES = {
 async function setBotCommandsMenu() {
   try {
     await bot.telegram.setMyCommands([
+      { command: 'start', description: '✨ شروع ربات و نمایش معرفی گاد با رقص نور' },
       { command: 'mafia', description: '🌙 شروع لابی جدید بازی مافیا در گروه' },
       { command: 'join', description: '🎮 پیوستن به بازی در حال ثبت‌نام' },
       { command: 'startgame', description: '🚀 توزیع نقش‌ها و شروع رسمی بازی' },
@@ -137,20 +138,61 @@ async function checkGameEnd(ctx, chatId, session) {
   return false;
 }
 
-bot.start((ctx) => {
+// پیاده‌سازی کامند start با رقص نور متنی و دکمه شیشه‌ای لابی
+bot.start(async (ctx) => {
   setBotCommandsMenu();
-  if (ctx.chat.type === 'private') {
-    ctx.reply(
-      "✨ سلام! من **گاد هوشمند بازی مافیا** هستم. 🎭\n\n" +
-      "منوی دستورات با زدن `/` فعال شد.\n" +
-      "برای ورود به پنل توسعه‌دهنده (رمز عبور: `1384`) روی دکمه زیر کلیک کنید:",
-      Markup.inlineKeyboard([
-        [Markup.button.callback("🛠 ورود به پنل توسعه‌دهنده", "action_dev_panel")],
-        [Markup.button.url("➕ افزودن ربات به گروه", `https://t.me/${bot.botInfo?.username || 'Bot'}?startgroup=true`)]
-      ])
-    );
-  } else {
-    ctx.reply("سلام! ربات مافیا در گروه فعال شد.");
+
+  // فریم‌های رقص نور متنی برای افکت ادیت شدن پیام
+  const frames = [
+    "✨ 🌟 💫 **آماده‌سازی تاریکی...** 💫 🌟 ✨\n\n🔮 درگاه‌های شهر مافیا در حال باز شدن است...",
+    "⚡ 🔵 🟣 **گاد هوشمند بیدار شد!** 🟣 🔵 ⚡\n\n🎭 من راوی و گرداننده تاریک‌ترین بازی قرن هستم...",
+    "🔥 🔴 🟡 **شهر آماده نبرد است...** 🟡 🔴 🔥\n\n👑 برای شروع لابی و ورود بازیکنان، روی دکمه زیر کلیک کنید!"
+  ];
+
+  const keyboard = Markup.inlineKeyboard([
+    [Markup.button.callback("🌙 باز کردن لابی مافیا (/mafia)", "action_start_lobby_from_start")]
+  ]);
+
+  try {
+    let sentMsg = await ctx.reply(frames[0], keyboard);
+    
+    // شبیه‌سازی رقص نور با ادیت کردن متوالی پیام
+    setTimeout(async () => {
+      try { await bot.telegram.editMessageText(ctx.chat.id, sentMsg.message_id, undefined, frames[1], keyboard); } catch (e) {}
+    }, 1000);
+
+    setTimeout(async () => {
+      try { await bot.telegram.editMessageText(ctx.chat.id, sentMsg.message_id, undefined, frames[2], keyboard); } catch (e) {}
+    }, 2000);
+
+  } catch (e) {
+    ctx.reply("✨ سلام! من گاد هوشمند بازی مافیا هستم.", keyboard);
+  }
+});
+
+// اکشن دکمه شیشه‌ای شروع لابی از طریق کامند استارت
+bot.action('action_start_lobby_from_start', async (ctx) => {
+  const chatId = ctx.chat.id;
+  await ctx.answerCbQuery("🌙 لابی بازی در حال ساخت...");
+
+  gameSessions[chatId] = {
+    status: 'lobby',
+    round: 0,
+    players: [],     
+    rolesAssigned: {}, 
+    isAlive: {},       
+    nightActions: {},
+    votes: {},
+    detectiveInquiries: {},
+    privateMessageIds: {}
+  };
+
+  try {
+    const sentMsg = await ctx.editMessageText(getLobbyText([]), getLobbyKeyboard());
+    await bot.telegram.pinChatMessage(chatId, sentMsg.message_id);
+  } catch (e) {
+    const sentMsg = await ctx.reply(getLobbyText([]), getLobbyKeyboard());
+    try { await bot.telegram.pinChatMessage(chatId, sentMsg.message_id); } catch(err) {}
   }
 });
 
@@ -165,6 +207,7 @@ bot.action('action_help_menu', async (ctx) => {
 
 function sendHelpMenu(ctx, isEdit = false) {
   const text = "📜 **راهنمای ربات مافیا:**\n\n" +
+               "🔹 `/start` - معرفی گاد و رقص نور\n" +
                "🔹 `/mafia` - باز کردن لابی ثبت‌نام در گروه\n" +
                "🔹 `/join` - پیوستن به بازی\n" +
                "🔹 `/startgame` - توزیع نقش‌ها و شروع بازی\n" +
@@ -432,7 +475,6 @@ bot.action(/start_day_(.+)/, async (ctx) => {
     session.isAlive[killedPlayer.id] = false;
   }
 
-  // بررسی پایان بازی بعد از کشته شدن در شب
   let isEnded = await checkGameEnd(ctx, chatId, session);
   if (isEnded) return;
 
@@ -576,7 +618,6 @@ bot.action(/end_vote_(.+)/, async (ctx) => {
 
   session.round += 1;
 
-  // بررسی پایان بازی بعد از اعدام روز
   let isEnded = await checkGameEnd(ctx, chatId, session);
   if (isEnded) return;
 
