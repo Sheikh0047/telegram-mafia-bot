@@ -3,13 +3,11 @@ const fetch = require('node-fetch');
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
 
-// دیتابیس موقت در حافظه برای مدیریت بازی‌ها
-let gameSessions = {}; // کلید: chatId، مقدار: وضعیت بازی
-let devAccess = {};    // بررسی اینکه آیا ادمین به پنل تست پی‌وی دسترسی پیدا کرده یا خیر
+let gameSessions = {}; 
+let devAccess = {};    
 
 const DEV_PASSWORD = "1384";
 
-// تعریف نقش‌ها، ایموجی‌ها و تیم‌ها
 const ROLES = {
   godfather: { name: "پدرخوانده", emoji: "🎩", team: "mafia" },
   mafia: { name: "مافیا ساده", emoji: "🦹‍♂️", team: "mafia" },
@@ -19,7 +17,21 @@ const ROLES = {
   citizen: { name: "شهروند ساده", emoji: "👤", team: "citizen" }
 };
 
-// تابع ارتباط با OpenRouter (گاد هوشمند)
+// تنظیم خودکار منوی کامندها برای تلگرام
+async function setBotCommandsMenu() {
+  try {
+    await bot.telegram.setMyCommands([
+      { command: 'mafia', description: '🌙 شروع لابی جدید بازی مافیا در گروه' },
+      { command: 'join', description: '🎮 پیوستن به بازی در حال ثبت‌نام' },
+      { command: 'startgame', description: '🚀 توزیع نقش‌ها و شروع رسمی بازی' },
+      { command: 'endgame', description: '🛑 پایان دادن اضطراری به بازی جاری' },
+      { command: 'help', description: '📜 راهنمای جامع و منوی شیشه‌ای ربات' }
+    ]);
+  } catch (e) {
+    console.error("Error setting commands menu:", e);
+  }
+}
+
 async function askGameMaster(prompt, context = "") {
   try {
     const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
@@ -56,7 +68,6 @@ async function askGameMaster(prompt, context = "") {
   }
 }
 
-// ساخت متن لابی
 function getLobbyText(players) {
   let text = "🌙 **تاریکی فرا می‌رسد...** 🌙\n\n" +
              "بازی جدید مافیا در حال ثبت‌نام است! 👥\n\n" +
@@ -71,11 +82,10 @@ function getLobbyText(players) {
     text += "📋 *هنوز هیچ‌کس به بازی نپیوسته است.*";
   }
 
-  text += "\n\n⚠️ **نکته:** حتماً قبل از شروع، ربات را در پی‌وی استارت کرده باشید!";
+  text += "\n\n⚠️ **نکته:** حتماً ربات را در پی‌وی استارت کرده باشید تا نقش‌ها ارسال شوند!";
   return text;
 }
 
-// کیبورد شیشه‌ای لابی
 function getLobbyKeyboard() {
   return Markup.inlineKeyboard([
     [Markup.button.callback("🎮 پیوستن به بازی (Join)", "action_join")],
@@ -84,23 +94,23 @@ function getLobbyKeyboard() {
   ]);
 }
 
-// دستور استارت ربات در پی‌وی (شامل پنل تست توسعه‌دهنده)
 bot.start((ctx) => {
+  setBotCommandsMenu();
   if (ctx.chat.type === 'private') {
     ctx.reply(
       "✨ سلام! من **گاد هوشمند بازی مافیا** هستم. 🎭\n\n" +
-      "برای ورود به **پنل تست توسعه‌دهنده** (جهت بررسی گزینه‌ها و تست ربات)، رمز عبور ۴ رقمی خود را بفرستید یا روی دکمه زیر کلیک کنید:",
+      "منوی دستورات با زدن `/` فعال شد.\n" +
+      "برای ورود به **پنل تست توسعه‌دهنده** (رمز عبور: `1384`) روی دکمه زیر کلیک کنید:",
       Markup.inlineKeyboard([
         [Markup.button.callback("🛠 ورود به پنل تست توسعه‌دهنده", "action_dev_panel")],
         [Markup.button.url("➕ افزودن ربات به گروه", `https://t.me/${bot.botInfo?.username || 'Bot'}?startgroup=true`)]
       ])
     );
   } else {
-    ctx.reply("سلام! ربات مافیا آماده است. برای راهنمایی دستور `/help` را بزنید.");
+    ctx.reply("سلام! ربات مافیا در گروه فعال شد.");
   }
 });
 
-// منوی شیشه‌ای راهنما (/help)
 bot.command('help', (ctx) => {
   sendHelpMenu(ctx);
 });
@@ -117,7 +127,7 @@ function sendHelpMenu(ctx, isEdit = false) {
                "🔹 `/startgame` - توزیع نقش‌ها و شروع بازی\n" +
                "🔹 `/endgame` - پایان دادن اضطراری به بازی\n" +
                "🔹 `/help` - نمایش این منوی راهنما\n\n" +
-               "🌙 در فاز شب، بازیکنان دارای مسئولیت (مافیا، دکتر، کارآگاه) به پی‌وی ربات مراجعه کنند تا اکشن‌های خود را با کلیدهای شیشه‌ای انجام دهند.";
+               "🌙 در فاز شب، بازیکنان به پی‌وی ربات مراجعه کنند تا اکشن‌ها را انجام دهند.";
   
   const keyboard = Markup.inlineKeyboard([
     [Markup.button.callback("🔄 بروزرسانی راهنما", "action_help_menu")],
@@ -136,13 +146,11 @@ bot.action('action_close_msg', async (ctx) => {
   try { await ctx.deleteMessage(); } catch(e) {}
 });
 
-// پنل تست توسعه‌دهنده با رمز 1384
 bot.action('action_dev_panel', async (ctx) => {
   await ctx.answerCbQuery();
   ctx.reply("🔐 لطفاً رمز عبور ۴ رقمی توسعه‌دهنده را ارسال کنید (مثال: 1384):");
 });
 
-// بررسی پیام‌ها برای رمز عبور پنل تست یا چت عمومی
 bot.on('text', async (ctx, next) => {
   const text = ctx.message.text;
   const userId = ctx.from.id;
@@ -151,8 +159,7 @@ bot.on('text', async (ctx, next) => {
     if (text === DEV_PASSWORD) {
       devAccess[userId] = true;
       return ctx.reply(
-        "✅ **احراز هویت موفقیت‌آمیز بود! به پنل تست توسعه‌دهنده خوش آمدید.** 🛠\n\n" +
-        "شما می‌توانید آپشن‌های ربات را تست کنید:",
+        "✅ **احراز هویت موفقیت‌آمیز بود! پنل تست توسعه‌دهنده فعال شد.** 🛠",
         Markup.inlineKeyboard([
           [Markup.button.callback("🧪 تست هوش مصنوعی گاد", "dev_test_ai")],
           [Markup.button.callback("📊 بررسی وضعیت حافظه ربات", "dev_test_status")],
@@ -160,10 +167,8 @@ bot.on('text', async (ctx, next) => {
         ])
       );
     } else if (devAccess[userId] && text.startsWith('/')) {
-      // اگر ادمین دستور فرستاد بذار رد بشه
       return next();
     } else if (devAccess[userId]) {
-      // تست ارسال پرامپت به هوش مصنوعی گاد به عنوان تست دیولوپر
       const aiReply = await askGameMaster(text, "تست توسعه‌دهنده در پنل شخصی");
       return ctx.reply(`🤖 **پاسخ تست هوش مصنوعی گاد:**\n\n${aiReply}`);
     }
@@ -182,7 +187,6 @@ bot.action('dev_test_status', async (ctx) => {
   ctx.reply(`📊 تعداد لابی‌های فعال در حافظه ربات: ${Object.keys(gameSessions).length} گروه.`);
 });
 
-// دستور شروع لابی
 bot.command('mafia', async (ctx) => {
   const chatId = ctx.chat.id;
   if (ctx.chat.type === 'private') return ctx.reply("❌ بازی مافیا باید داخل گروه انجام شود!");
@@ -191,14 +195,13 @@ bot.command('mafia', async (ctx) => {
     status: 'lobby',
     players: [],     
     rolesAssigned: {}, 
-    isAlive: {},       // id -> boolean (زنده بودن)
-    nightActions: {}   // اکشن‌های شب
+    isAlive: {},       
+    nightActions: {}   
   };
 
   await ctx.reply(getLobbyText([]), getLobbyKeyboard());
 });
 
-// دکمه پیوستن به بازی
 bot.action('action_join', async (ctx) => {
   const chatId = ctx.chat.id;
   const user = ctx.from;
@@ -231,7 +234,6 @@ bot.command('join', (ctx) => {
   }
 });
 
-// دستور پایان بازی (/endgame)
 bot.command('endgame', (ctx) => {
   const chatId = ctx.chat.id;
   if (gameSessions[chatId]) {
@@ -242,7 +244,6 @@ bot.command('endgame', (ctx) => {
   }
 });
 
-// توزیع هوشمند نقش‌ها توسط هوش مصنوعی بر اساس تعداد بازیکنان و شروع بازی
 async function handleGameStart(ctx, chatId) {
   const session = gameSessions[chatId];
   if (!session || session.status !== 'lobby') return;
@@ -254,7 +255,6 @@ async function handleGameStart(ctx, chatId) {
   session.status = 'playing';
   const players = session.players;
 
-  // تقسیم هوشمند نقش‌ها با توجه به تعداد بازیکنان
   const assignedRoles = {};
   players.forEach((p, i) => {
     session.isAlive[p.id] = true;
@@ -266,7 +266,6 @@ async function handleGameStart(ctx, chatId) {
   });
   session.rolesAssigned = assignedRoles;
 
-  // ارسال نقش به پی‌وی هر بازیکن
   for (const p of players) {
     const rKey = assignedRoles[p.id];
     const rInfo = ROLES[rKey];
@@ -309,7 +308,6 @@ async function handleGameStart(ctx, chatId) {
     ]));
   }
 
-  // اجرای تایمر متنی ۲ دقیقه‌ای شب (120 ثانیه)
   runNightTimer(chatId, sentMsg.chat.id, sentMsg.message_id);
 }
 
@@ -322,15 +320,13 @@ bot.command('startgame', (ctx) => {
   handleGameStart(ctx, ctx.chat.id);
 });
 
-// تابع مدیریت تایمر شب (۲ دقیقه = ۱۲۰ ثانیه با قابلیت آپدیت متن پیام)
 async function runNightTimer(chatId, targetChatId, messageId) {
-  let timeLeft = 120; // 2 دقیقه
+  let timeLeft = 120;
 
   const interval = setInterval(async () => {
-    timeLeft -= 15; // هر 15 ثانیه آپدیت متنی
+    timeLeft -= 15; 
     if (timeLeft <= 0) {
       clearInterval(interval);
-      // پایان شب و اعلام نتایج صبح
       await processNightResults(chatId, targetChatId, messageId);
     } else {
       let mins = Math.floor(timeLeft / 60);
@@ -346,12 +342,10 @@ async function runNightTimer(chatId, targetChatId, messageId) {
   }, 15000);
 }
 
-// پردازش نتایج شب و نمایش انیمیشن صبحگاهی با هوش مصنوعی
 async function processNightResults(chatId, targetChatId, messageId) {
   const session = gameSessions[chatId];
   if (!session) return;
 
-  // انتخاب تصادفی یک قربانی فرضی برای تست در صورت ثبت نشدن اکشن
   const alivePlayers = session.players.filter(p => session.isAlive[p.id]);
   let killedPlayer = alivePlayers.length > 0 ? alivePlayers[Math.floor(Math.random() * alivePlayers.length)] : null;
   
@@ -372,7 +366,6 @@ async function processNightResults(chatId, targetChatId, messageId) {
   } catch (e) {}
 }
 
-// مدیریت کلیک دکمه‌های فاز شب با بررسی زنده بودن و نقش شخص
 bot.action('action_night_actions', async (ctx) => {
   await ctx.answerCbQuery();
   const userId = ctx.from.id;
@@ -394,7 +387,6 @@ bot.action('action_night_actions', async (ctx) => {
 
   const session = gameSessions[activeChatId];
 
-  // بررسی زنده بودن بازیکن
   if (session.isAlive[userId] === false) {
     return ctx.reply("❌ شما در این بازی کشته شده‌اید و دیگر به بخش شب دسترسی ندارید! 🪦");
   }
@@ -415,17 +407,12 @@ bot.action('action_night_actions', async (ctx) => {
   }
 });
 
-// ثبت کلیک‌ها با چک کردن اینکه کاربر مرده یا زنده است
 bot.action(/shoot_(.+)/, async (ctx) => {
-  const targetId = ctx.match[1];
   const userId = ctx.from.id;
-  
-  // پیدا کردن سشن و چک کردن حیات
   let session = Object.values(gameSessions).find(s => s.rolesAssigned && s.rolesAssigned[userId]);
   if (session && session.isAlive[userId] === false) {
-    return ctx.answerCbQuery("❌ شما مرده‌اید و نمی‌توانید شلیک کنید!", { show_alert: true });
+    return ctx.answerCbQuery("❌ شما مرده‌اید!", { show_alert: true });
   }
-
   await ctx.answerCbQuery("🎯 شلیک ثبت شد!");
   ctx.reply("✅ شلیک شما با موفقیت ثبت گردید.");
 });
@@ -452,17 +439,18 @@ bot.action(/detect_(.+)/, async (ctx) => {
 
 bot.action('action_day_vote', async (ctx) => {
   await ctx.answerCbQuery("رأی‌گیری روز به زودی فعال می‌شود...");
-  ctx.reply("🗳 فاز روز آغاز شد. در گروه درباره اعدام مفرودین گفتگو و رأی‌گیری کنید.");
+  ctx.reply("🗳 فاز روز آغاز شد. در گروه درباره اعدام افراد گفتگو و رأی‌گیری کنید.");
 });
 
-// هندلر وب‌هک Vercel
+setBotCommandsMenu();
+
 module.exports = async (req, res) => {
   try {
     if (req.method === 'POST') {
       await bot.handleUpdate(req.body);
       res.status(200).json({ status: 'ok' });
     } else {
-      res.status(200).send('Advanced Telegram Mafia Bot is active! 🚀');
+      res.status(200).send('Mafia Bot with Group Direct Commands is active! 🚀');
     }
   } catch (error) {
     console.error("Webhook Error:", error);
