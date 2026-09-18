@@ -5,6 +5,8 @@ const bot = new Telegraf(process.env.BOT_TOKEN);
 
 let gameSessions = {}; 
 let devAccess = {};    
+let activeGroups = new Set(); // ذخیره آیدی گروه‌هایی که ربات در آن‌ها فعال است
+let groupRecentUsers = {};    // ذخیره کاربران اخیر هر گروه برای تگ کردن
 
 const DEV_PASSWORD = "1384";
 
@@ -49,7 +51,7 @@ async function askGameMaster(prompt, context = "") {
         "messages": [
           {
             "role": "system",
-            "content": "تو گاد (راوی مرموز و جذاب) بازی مافیا هستی. متن‌هایت باید کوتاه (حداکثر ۲ الی ۳ خط)، پر از ایموجی، بسیار مهیج، سینمایی، کمی طعنه‌آمیز اما دوستانه باشند."
+            "content": "تو گاد (راوی مرموز، جذاب و کمی طعنه‌آمیز) بازی مافیا هستی. متن‌هایت باید کوتاه (حداکثر ۲ الی ۳ خط)، پر از ایموجی، بسیار مهیج و سینمایی باشند."
           },
           {
             "role": "user",
@@ -84,7 +86,7 @@ function getLobbyText(players) {
     text += "📋 *هنوز کسی به بازی نپیوسته است.*";
   }
 
-  text += "\n\n⚠️ حتماً ربات را در پی‌وی استارت کرده باشید تا نقش‌ها ارسال شوند!";
+  text += "\n\n⚠️ حتماً ربات را در پی‌وی استارت کرده باشید تا نقش‌ها و چت‌های خصوصی کار کنند!";
   return text;
 }
 
@@ -96,7 +98,6 @@ function getLobbyKeyboard() {
   ]);
 }
 
-// بررسی شرایط برد و باخت بازی
 async function checkGameEnd(ctx, chatId, session) {
   let alivePlayers = session.players.filter(p => session.isAlive[p.id]);
   
@@ -138,7 +139,6 @@ async function checkGameEnd(ctx, chatId, session) {
   return false;
 }
 
-// کامند start با رقص نور متنی و دکمه شیشه‌ای لابی
 bot.start(async (ctx) => {
   setBotCommandsMenu();
 
@@ -226,38 +226,31 @@ bot.action('action_close_msg', async (ctx) => {
   try { await ctx.deleteMessage(); } catch(e) {}
 });
 
-bot.action('action_dev_panel', async (ctx) => {
-  await ctx.answerCbQuery();
-  ctx.reply("🔐 رمز عبور توسعه‌دهنده را بفرستید:");
-});
-
-// مدیریت هوشمند پیام‌های متنی (چت آزاد با گاد خارج از گیم یا پنل توسعه‌دهنده)
+// مدیریت هوشمند پیام‌های متنی (ثبت گروه‌ها، ذخیره کاربران برای تگ رندوم، چت آزاد با گاد)
 bot.on('text', async (ctx, next) => {
   const text = ctx.message.text;
   const userId = ctx.from.id;
   const chatId = ctx.chat.id;
 
-  // اگر در پی‌وی توسعه‌دهنده باشد
-  if (ctx.chat.type === 'private') {
-    if (text === DEV_PASSWORD) {
-      devAccess[userId] = true;
-      return ctx.reply("✅ احراز هویت موفقیت‌آمیز بود! پنل تست فعال شد.");
-    } else if (devAccess[userId] && text.startsWith('/')) {
-      return next();
-    } else if (devAccess[userId]) {
-      const aiReply = await askGameMaster(text, "تست توسعه‌دهنده");
-      return ctx.reply(`🤖 پاسخ گاد:\n\n${aiReply}`);
+  // اگر پیام در گروه است، گروه را ثبت و کاربر را ذخیره کن
+  if (ctx.chat.type === 'group' || ctx.chat.type === 'supergroup') {
+    activeGroups.add(chatId);
+    
+    if (!groupRecentUsers[chatId]) {
+      groupRecentUsers[chatId] = [];
     }
-  } 
-  
-  // اگر در گروه باشد و کسی با گاد صحبت کند (منشن کردن ربات یا ریپلای کردن به پیام ربات)
-  else if (ctx.chat.type === 'group' || ctx.chat.type === 'supergroup') {
+    // اضافه کردن کاربر به لیست کاربران اخیر (اگر تکراری نباشد)
+    if (!groupRecentUsers[chatId].some(u => u.id === userId)) {
+      groupRecentUsers[chatId].push({ id: userId, name: ctx.from.first_name, username: ctx.from.username });
+      // حداکثر ۲۰ کاربر آخر نگه داشته شوند
+      if (groupRecentUsers[chatId].length > 20) groupRecentUsers[chatId].shift();
+    }
+
     const botUsername = ctx.botInfo ? ctx.botInfo.username : '';
     const isMentioned = text.includes(`@${botUsername}`);
     const isReplyToBot = ctx.message.reply_to_message && ctx.message.reply_to_message.from.id === ctx.botInfo.id;
 
     if (isMentioned || isReplyToBot) {
-      // پاک کردن نام ربات از متن برای تمیزی پرامپت هوش مصنوعی
       const cleanPrompt = text.replace(new RegExp(`@${botUsername}`, 'gi'), '').trim();
       if (cleanPrompt.length > 0) {
         const aiResponse = await askGameMaster(cleanPrompt, `چت آزاد در گروه با بازیکن ${ctx.from.first_name}`);
@@ -266,14 +259,71 @@ bot.on('text', async (ctx, next) => {
         });
       }
     }
+  } 
+  
+  // اگر در پی‌وی باشد
+  else if (ctx.chat.type === 'private') {
+    if (text === DEV_PASSWORD) {
+      devAccess[userId] = true;
+      return ctx.reply("✅ احراز هویت موفقیت‌آمیز بود! پنل تست فعال شد.");
+    } else if (devAccess[userId] && text.startsWith('/')) {
+      return next();
+    } else if (devAccess[userId]) {
+      const aiReply = await askGameMaster(text, "تست توسعه‌دهنده");
+      return ctx.reply(`🤖 پاسخ گاد:\n\n${aiReply}`);
+    } else {
+      let activeSession = null;
+      for (const s of Object.values(gameSessions)) {
+        if (s.status === 'playing' && s.players.some(p => p.id === userId)) {
+          activeSession = s;
+          break;
+        }
+      }
+
+      if (activeSession) {
+        const playerRoleKey = activeSession.rolesAssigned[userId];
+        const roleInfo = ROLES[playerRoleKey];
+        const contextInfo = `بازیکن ${ctx.from.first_name} با نقش ${roleInfo.name} در پی‌وی با شما صحبت می‌کند.`;
+        const aiPvReply = await askGameMaster(text, contextInfo);
+        return ctx.reply(`🎭 **گاد:**\n\n${aiPvReply}`);
+      } else {
+        return ctx.reply("✨ سلام! برای شروع یا شرکت در بازی مافیا، لطفا وارد گروه شوید و لابی را باز کنید.");
+      }
+    }
   }
 
   return next();
 });
 
+// تایمر خودکار: هر ۲ ساعت یک‌بار (می‌توانید زمان را کم یا زیاد کنید) ربات به طور تصادفی یک گروه و یک کاربر را انتخاب می‌کند و تعامل را شروع می‌کند
+setInterval(async () => {
+  if (activeGroups.size === 0) return;
+
+  for (const chatId of activeGroups) {
+    const users = groupRecentUsers[chatId];
+    if (!users || users.length === 0) continue;
+
+    // انتخاب رندوم یک کاربر از لیست کاربران اخیر گروه
+    const randomUser = users[Math.floor(Math.random() * users.length)];
+    
+    const prompt = `یک پیام کوتاه، مرموز و جذاب بساز که در آن کاربر ${randomUser.name} را تگ کنی، احوالپرسی کنی یا درباره سکوت یا وضعیت گروه متلک/تکه‌ای بیندازی تا بحث داغ شود.`;
+    const aiMessage = await askGameMaster(prompt, "شروع تعامل خودکار گاد در گروه");
+
+    try {
+      // ساخت تگ به صورت استاندارد در تلگرام (استفاده از نام کاربر به عنوان متن لینک یا منتشن)
+      const userTagText = randomUser.username ? `@${randomUser.username}` : `[${randomUser.name}](tg://user?id=${randomUser.id})`;
+      await bot.telegram.sendMessage(chatId, `🎭 **گاد:**\n\n${userTagText} ${aiMessage}`, { parse_mode: 'Markdown' });
+    } catch (e) {
+      console.error("Auto message error:", e);
+    }
+  }
+}, 2 * 60 * 60 * 1000); // هر ۲ ساعت (برای تست می‌توانید عدد را به مثلاً ۵ دقیقه یعنی 5 * 60 * 1000 تغییر دهید)
+
 bot.command('mafia', async (ctx) => {
   const chatId = ctx.chat.id;
   if (ctx.chat.type === 'private') return ctx.reply("❌ بازی مافیا باید داخل گروه انجام شود!");
+
+  activeGroups.add(chatId);
 
   gameSessions[chatId] = {
     status: 'lobby',
@@ -374,6 +424,11 @@ async function handleGameStart(ctx, chatId) {
         p.id,
         `🎭 **نقش شما:**\n\n👤 نام: **${p.name}**\n🏷 نقش: **${rInfo.name}** ${rInfo.emoji}\n⚔ تیم: **${teamText}**${extra}`
       );
+
+      const introPrompt = `به بازیکن ${p.name} که نقش ${rInfo.name} را دارد خوش‌آمد بگو، با او کمی گرم بگیر و به عنوان گاد درباره این نقش و رازهای بازی سرنخ بده تا گفتگو شروع شود.`;
+      const aiWelcomeMessage = await askGameMaster(introPrompt, `نقش بازیکن: ${rInfo.name}`);
+      await bot.telegram.sendMessage(p.id, `🗣 **گاد:**\n\n${aiWelcomeMessage}`);
+
     } catch (e) {}
   }
 
@@ -592,7 +647,6 @@ bot.action(/vote_(.+)_(.+)/, async (ctx) => {
 });
 
 bot.action(/end_vote_(.+)/, async (ctx) => {
-  const chatId = match[1]; // اصلاح شدنی نیست ولی دست‌نخورده باقی بماند چون از ctx.match استفاده می‌کنیم
   const chatIdReal = ctx.match[1];
   const session = gameSessions[chatIdReal];
   if (!session) return ctx.answerCbQuery("❌ بازی معتبری یافت نشد!", { show_alert: true });
@@ -657,7 +711,6 @@ bot.action(/end_vote_(.+)/, async (ctx) => {
 
 // اکشن‌های شب در پی‌وی
 bot.action(/shoot_(.+)_(.+)/, async (ctx) => {
-  const userId = ctx.from.id;
   await ctx.answerCbQuery("🎯 شلیک شما ثبت شد!");
   try {
     await ctx.editMessageText("🎯 **شلیک شما ثبت شد و منقضی گردید.**", Markup.inlineKeyboard([]));
